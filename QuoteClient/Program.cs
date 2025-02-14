@@ -1,7 +1,9 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Sockets;
+using System.Reflection.Emit;
 using System.Text;
 using System.Threading.Tasks;
 
@@ -12,42 +14,56 @@ namespace QuoteClient
         private const string serverIp = "127.0.0.1";
         private const int port = 5555;
 
-        public static async Task RunClientAsync()
+        private static NetworkStream stream;
+        private static StreamWriter writer;
+        private static StreamReader reader;
+
+        public static void RunClientAsync()
         {
             try
             {
                 using (TcpClient client = new TcpClient())
                 {
                     Console.WriteLine("Подключение к серверу...");
-                    await client.ConnectAsync(serverIp, port);
+                    client.Connect(serverIp, port);
                     Console.WriteLine("Подключение установлено");
 
                     NetworkStream stream = client.GetStream();
+                    StreamWriter writer = new StreamWriter(stream) { AutoFlush = true };
+                    StreamReader reader = new StreamReader(stream);
 
-                    while(true)
+                    Console.WriteLine(reader.ReadLine());
+                    string username =  Console.ReadLine();
+                    writer.WriteLine(username);
+
+                    Console.WriteLine(reader.ReadLine());
+                    string password = Console.ReadLine();
+                    writer.WriteLine(password);
+
+                    string connect = reader.ReadLine();
+                    if (connect == "disconnect")
+                    {
+                        Console.WriteLine(reader.ReadLine());
+                        throw new Exception("error");
+                    }
+
+                    if (connect != "access")
+                    {
+                        Console.WriteLine(reader.ReadLine());
+                        throw new Exception("error");
+                    }
+
+                    while (true)
                     {
                         Console.WriteLine("Введите команду (quote или exit)");
                         string command = Console.ReadLine().Trim().ToLower();
 
-                        byte[] requestBytes = Encoding.UTF8.GetBytes(command);
-                        await stream.WriteAsync(requestBytes, 0, requestBytes.Length);
+                        writer.WriteLine(command);
 
-                        byte[] buffer = new byte[1024];
-                        int readBytes = await stream.ReadAsync(buffer, 0, buffer.Length);
+                        string quote = reader.ReadLine();
 
-                        string quote = Encoding.UTF8.GetString(buffer, 0, readBytes);
-
-                        if (command.Equals("exit"))
-                            break;
-
-                        if (command.Equals("quote")) {     
-                            Console.WriteLine(quote);
-                        }
-                        else
-                        {
-                            Console.WriteLine("Неверная команда");
-                        }
-                    }
+                        Console.WriteLine(quote);
+                    }                
                 }
             }
             catch(Exception ex)
@@ -55,9 +71,10 @@ namespace QuoteClient
                 Console.WriteLine(ex.Message);
             }
         }
-        static async Task Main(string[] args)
+
+        static void Main(string[] args)
         {
-            await RunClientAsync();
+            RunClientAsync();
         }
     }
 }

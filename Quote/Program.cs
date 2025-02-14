@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace QuoteServer
@@ -19,8 +20,18 @@ namespace QuoteServer
             "Когда рак на горе свистнет"
         };
 
+        private static int maxCountClient = 2;
+        private static int activeClient = 0;
+        private static object clientObject = new object();
+
+        private static Dictionary<string, string> users = new Dictionary<string, string>()
+        {
+            {"user1", "1234" },
+            { "user2", "4321" }
+        };
+
         //запуск сервера
-        public static async Task StartServerAsync()
+        public static  void StartServerAsync()
         {
             try
             {
@@ -30,16 +41,29 @@ namespace QuoteServer
 
                 while (true)
                 {
-                    TcpClient client = await tcp.AcceptTcpClientAsync();
-
-                    await HandleClientAsync(client).ContinueWith(t =>
+                    TcpClient client = tcp.AcceptTcpClient();
+                    lock (clientObject)
                     {
-                        if (t.IsFaulted)
+                        if (activeClient >= maxCountClient)
                         {
-                            Console.WriteLine($"Ошибка обработки " +
-                                $"запроса от клиента. {t.Exception}");
+                            using (NetworkStream stream = client.GetStream())
+                            {
+                                using (StreamWriter writer = new StreamWriter(stream) { AutoFlush = true })
+                                {
+                                    writer.WriteLine("disconnect");
+                                    writer.WriteLine("Сервер перегружен. Повторите попытку позже");
+                                }
+                            }
+                            client.Close();
+                            continue;
                         }
-                    });
+                        activeClient++;
+                    }
+
+                    Thread thread = new Thread(() => 
+                        HandleClientAsync(client));
+
+                    thread.Start();
                 }
             }
             catch (Exception ex)
@@ -49,27 +73,42 @@ namespace QuoteServer
 
         }
 
-        private static async Task HandleClientAsync(TcpClient client)
+        private static void HandleClientAsync(TcpClient client)
         {
             NetworkStream stream = null;
-            string clientId = Guid.NewGuid().ToString().Substring(0, 8);
+            StreamReader reader = null;
+            StreamWriter writer = null;
 
+            string clientId = Guid.NewGuid().ToString().Substring(0, 8);
             try
-            {
+            { 
                 stream = client.GetStream();
+                reader = new StreamReader(stream);
+                writer = new StreamWriter(stream) { AutoFlush = true };
+
+                writer.WriteLine("Введите логин");
+                string username = reader.ReadLine();
+
+                writer.WriteLine("Введите пароль");
+                string password = reader.ReadLine();
+
+                if (!users.ContainsKey(username) || users[username] != password)
+                {
+                    writer.WriteLine("Неверный логи или пароль");
+                    throw new Exception("неверные данные");
+                }
+
+                writer.WriteLine("access");
+
                 bool isConected = true;
                 LogEvent($"Клиент {clientId} подключился.");
                 int countRequest = 0;
                 while (isConected && countRequest < 3)
-                {
-                    byte[] buffer = new byte[256];
-                    int bytesRead = await stream
-                        .ReadAsync(buffer, 0, buffer.Length);
+                {                   
+                    string request = reader.ReadLine();
 
-                    string request = Encoding.UTF8.GetString(buffer, 0, bytesRead);
-                    byte[] responseBytes = null;
                     string response = "";
-                    if (request.Equals("quote")) 
+                    if (request?.Equals("quote") == true) 
                     {
                         response = GetRandomQuote();                  
                         LogEvent($"Клиенту {clientId} отправлена цитата {response}");                    
@@ -80,8 +119,9 @@ namespace QuoteServer
                             response = "Закончен лимит цитат ";
                             Console.WriteLine("Закончен лимит");
                         }
+                        writer.WriteLine(response);
                     }
-                    else if(request.Equals("exit"))
+                    else if(request?.Equals("exit") == true)
                     {
                         isConected = false;
                         LogEvent($"Клиент {clientId} отправил запрос на отключение");
@@ -89,14 +129,13 @@ namespace QuoteServer
                     else
                     {
                         response = "Запрос некорректный. " +
-                            "Отправьте \"qoute\" или \"exit\"";               
-                        await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
+                            "Отправьте \"qoute\" или \"exit\"";
+                        writer.WriteLine(response);
 
                         LogEvent($"Клиент {clientId} отправил неверный запрос");
                     }
 
-                    responseBytes = Encoding.UTF8.GetBytes(response);
-                    await stream.WriteAsync(responseBytes, 0, responseBytes.Length);
+                    
                 }
             }
             catch(Exception ex)
@@ -105,8 +144,11 @@ namespace QuoteServer
             }
             finally
             {
+                reader.Close();
+                writer.Close();
                 stream.Close();
                 client.Close();
+                activeClient--;
                 LogEvent($"Клиент {clientId} отключился");
             }
         }
@@ -126,9 +168,9 @@ namespace QuoteServer
             Console.WriteLine(logEntry);
         }
 
-        static async Task Main(string[] args)
+        static void Main(string[] args)
         {
-            await StartServerAsync();
+            StartServerAsync();
         }
     }
 }
